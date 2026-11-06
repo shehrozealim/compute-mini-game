@@ -43,14 +43,47 @@ export type Room = {
 export function createGameServer() {
   const app = express(),
     http = createServer(app),
-    origins = (
+    rawOrigins = (
       process.env.ALLOWED_ORIGINS ||
-      "http://localhost:3000,http://127.0.0.1:3000"
+      "http://localhost:3000,http://127.0.0.1:3000,*.vercel.app,*"
     )
       .split(",")
-      .map((v) => v.trim());
+      .map((v) => v.trim().replace(/\/+$/, ""));
+
+  const isOriginAllowed = (origin?: string): boolean => {
+    if (!origin) return true;
+    const clean = origin.replace(/\/+$/, "");
+    if (rawOrigins.includes("*")) return true;
+    if (rawOrigins.includes(clean)) return true;
+    try {
+      const parsed = new URL(clean);
+      const host = parsed.hostname;
+      if (host === "localhost" || host === "127.0.0.1") return true;
+      if (host.endsWith(".vercel.app") || host.endsWith(".trycloudflare.com")) return true;
+      for (const pattern of rawOrigins) {
+        if (pattern === "*") return true;
+        if (pattern.startsWith("*.") && host.endsWith(pattern.slice(2))) return true;
+        if (pattern.startsWith("http://*.") || pattern.startsWith("https://*.")) {
+          const suffix = pattern.replace(/^https?:\/\/\*\./, "");
+          if (host.endsWith(suffix)) return true;
+        }
+      }
+    } catch {}
+    return false;
+  };
+
   const io = new Server(http, {
-    cors: { origin: origins },
+    cors: {
+      origin: (origin, callback) => {
+        if (isOriginAllowed(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("CORS origin not allowed: " + origin));
+        }
+      },
+      methods: ["GET", "POST"],
+      credentials: true,
+    },
     maxHttpBufferSize: 2048,
     perMessageDeflate: false,
     allowRequest: (req, cb) => {
@@ -62,7 +95,7 @@ export function createGameServer() {
       } catch {}
       cb(
         null,
-        !req.headers.origin || same || origins.includes(req.headers.origin),
+        !req.headers.origin || same || isOriginAllowed(req.headers.origin),
       );
     },
   });
@@ -335,7 +368,7 @@ export function createGameServer() {
         }
       }
     }
-    if (changed && tick % 2 === 0) {
+    if (changed) {
       for (const code of activeRooms) {
         const r = rooms.get(code)!;
         io.to(code).volatile.emit("snapshot", { ...r.match, events: r.events });

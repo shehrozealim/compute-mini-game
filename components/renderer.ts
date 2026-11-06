@@ -1,6 +1,6 @@
 import { asset, SCENERY, paintTerrain, paintProp, paintCrate } from "./scenery";
 import { MAPS, TROOPS, TROOP_IDS, type MapId, type TroopId } from "../shared/config";
-import { W, H, idle, trapActive, type Match, type Input, type Shot } from "../shared/game";
+import { W, H, idle, trapActive, blocked, type Match, type Input, type Shot, type Hero } from "../shared/game";
 type Options = {
   getMatch: () => Match;
   getTeam: () => number;
@@ -64,9 +64,52 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
     holdingFire = false,
     pendingShot = false,
     fireLatchUntil = 0;
+
+  const predictedShots: (Shot & { spawnTime: number })[] = [];
+  function spawnPredictedShot(team: number, h: Hero) {
+    const def = TROOPS[h.troop];
+    const d = display[team] || { x: h.x, y: h.y };
+    const aimX = input.aimX ?? d.x + Math.cos(input.angle) * 320;
+    const aimY = input.aimY ?? d.y + Math.sin(input.angle) * 320;
+    const dist = Math.min(
+      def.range,
+      Math.hypot(aimX - d.x, aimY - d.y),
+    );
+    let tx = d.x + Math.cos(input.angle) * dist;
+    let ty = d.y + Math.sin(input.angle) * dist;
+    if (h.troop === "bomber") {
+      const curM = o.getMatch();
+      for (let distStep = 8; distStep < dist; distStep += 8) {
+        const px = d.x + Math.cos(input.angle) * distStep;
+        const py = d.y + Math.sin(input.angle) * distStep;
+        if (blocked(px, py, 8, curM, true)) {
+          tx = d.x + Math.cos(input.angle) * Math.max(0, distStep - 16);
+          ty = d.y + Math.sin(input.angle) * Math.max(0, distStep - 16);
+          break;
+        }
+      }
+    }
+    predictedShots.push({
+      id: -Math.floor(performance.now() * 1000 + Math.random() * 1000),
+      x: d.x,
+      y: d.y,
+      vx: Math.cos(input.angle) * def.shotSpeed,
+      vy: Math.sin(input.angle) * def.shotSpeed,
+      team,
+      life: def.range / def.shotSpeed,
+      troop: h.troop,
+      targetX: tx,
+      targetY: ty,
+      fuse: -1,
+      spawnTime: performance.now(),
+    });
+  }
+
   const syncInput = () => {
     const m = o.getMatch(),
-      h = m.heroes[o.getTeam()];
+      myTeam = o.getTeam(),
+      h = m.heroes[myTeam],
+      d = display[myTeam];
     const now = performance.now();
     if (pendingShot && h.cd > 0.12) {
       pendingShot = false;
@@ -81,9 +124,11 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
     input.y =
       Number(keys.has("s") || keys.has("arrowdown")) -
       Number(keys.has("w") || keys.has("arrowup"));
-    input.angle = aimSet ? Math.atan2(aim.y - h.y, aim.x - h.x) : h.angle;
-    input.aimX = aimSet ? aim.x : Math.max(0, Math.min(W, h.x + Math.cos(h.angle) * 320));
-    input.aimY = aimSet ? aim.y : Math.max(0, Math.min(H, h.y + Math.sin(h.angle) * 320));
+    const originX = d ? d.x : h.x;
+    const originY = d ? d.y : h.y;
+    input.angle = aimSet ? Math.atan2(aim.y - originY, aim.x - originX) : h.angle;
+    input.aimX = aimSet ? aim.x : Math.max(0, Math.min(W, originX + Math.cos(h.angle) * 320));
+    input.aimY = aimSet ? aim.y : Math.max(0, Math.min(H, originY + Math.sin(h.angle) * 320));
     input.fire = holdingFire || pendingShot || now < fireLatchUntil;
   };
   const triggerFire = () => {
@@ -95,6 +140,13 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
       input.fire = true;
       o.send({ ...input, fire: true });
       lastSend = performance.now();
+
+      const myTeam = o.getTeam();
+      const myHero = o.getMatch().heroes[myTeam];
+      if (myHero && myHero.cd <= 0.08) {
+        spawnPredictedShot(myTeam, myHero);
+        myHero.cd = TROOPS[myHero.troop].interval * (myHero.rapid > 0 ? 0.55 : 1);
+      }
     }
   };
   const clear = () => {
@@ -148,7 +200,14 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
   };
   const up = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();
-    keys.delete(k);
+    if (keys.has(k)) {
+      keys.delete(k);
+      if (o.isActive()) {
+        syncInput();
+        o.send({ ...input });
+        lastSend = performance.now();
+      }
+    }
     if (k === " " || k === "spacebar" || k === "f") {
       holdingFire = false;
     }
@@ -172,6 +231,12 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
   const release = (e: MouseEvent | PointerEvent) => {
     if (e.button === 0 || e.button === 2) {
       holdingFire = false;
+      if (o.isActive()) {
+        syncInput();
+        input.fire = false;
+        o.send({ ...input, fire: false });
+        lastSend = performance.now();
+      }
     }
   };
   const context = (e: Event) => e.preventDefault();
@@ -288,22 +353,23 @@ export function createRenderer(canvas: HTMLCanvasElement, o: Options) {
     if (o.isActive() && document.visibilityState === "visible") {
       const h = m.heroes[o.getTeam()];
       syncInput();
-      if (now - lastSend >= 30) {
+      if (now - lastSend >= 16) {
         o.send({ ...input });
         lastSend = now;
       }
       if (aimSet) {
+        const myD = display[o.getTeam()] || h;
         const def = TROOPS[h.troop],
-          d = Math.min(def.range, Math.hypot(aim.x - h.x, aim.y - h.y)),
-          x = h.x + Math.cos(input.angle) * d,
-          y = h.y + Math.sin(input.angle) * d;
+          dist = Math.min(def.range, Math.hypot(aim.x - myD.x, aim.y - myD.y)),
+          x = myD.x + Math.cos(input.angle) * dist,
+          y = myD.y + Math.sin(input.angle) * dist;
         ctx.strokeStyle = "#e6faff99";
         ctx.lineWidth = 1.5;
         ctx.setLineDash([4, 12]);
         ctx.beginPath();
         ctx.moveTo(
-          h.x + Math.cos(input.angle) * 32,
-          h.y + Math.sin(input.angle) * 32,
+          myD.x + Math.cos(input.angle) * 32,
+          myD.y + Math.sin(input.angle) * 32,
         );
         ctx.lineTo(x, y);
         ctx.stroke();
@@ -673,15 +739,80 @@ function paintCustomProjectile(
   ctx.restore();
 }
 
-    for (const p of m.shots) {
+    // Advance and prune client predicted shots
+    for (let i = predictedShots.length - 1; i >= 0; i--) {
+      const p = predictedShots[i];
+      const def = TROOPS[p.troop];
+      p.life -= dt;
+      if (p.life <= 0) {
+        predictedShots.splice(i, 1);
+        continue;
+      }
+      const matched = m.shots.some(
+        (s) => s.team === p.team && Math.hypot(s.x - p.x, s.y - p.y) < 70,
+      );
+      if (matched || now - p.spawnTime > 400) {
+        predictedShots.splice(i, 1);
+        continue;
+      }
+      if (p.troop === "bomber") {
+        if (p.fuse < 0) {
+          const d = Math.hypot(p.targetX - p.x, p.targetY - p.y);
+          if (d < def.shotSpeed * dt) {
+            p.x = p.targetX;
+            p.y = p.targetY;
+            p.fuse = 0.8;
+          } else {
+            p.x += ((p.targetX - p.x) / d) * def.shotSpeed * dt;
+            p.y += ((p.targetY - p.y) / d) * def.shotSpeed * dt;
+          }
+        } else {
+          p.fuse -= dt;
+        }
+      } else {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
+    }
+
+    const allShots = [...m.shots, ...predictedShots];
+    for (const p of allShots) {
       const def = TROOPS[p.troop];
       paintCustomProjectile(ctx, p, def, now, o.reduced());
     }
     m.heroes.forEach((h, t) => {
-      const d = display[t],
-        a = 1 - Math.exp(-dt * 24);
-      d.x += (h.x - d.x) * a;
-      d.y += (h.y - d.y) * a;
+      const d = display[t];
+      const isLocal = o.isActive() && t === o.getTeam();
+      if (isLocal) {
+        // Immediate 0ms local client prediction
+        const def = TROOPS[h.troop];
+        const n = Math.hypot(input.x, input.y);
+        if (n > 0) {
+          const speed = def.speed * (h.slow > 0 ? 0.8 : 1) * (h.haste > 0 ? 1.2 : 1);
+          const nextX = d.x + (input.x / n) * speed * dt;
+          const nextY = d.y + (input.y / n) * speed * dt;
+          if (!blocked(nextX, d.y, 20, m)) d.x = nextX;
+          if (!blocked(d.x, nextY, 20, m)) d.y = nextY;
+        }
+        // Smooth authoritative reconciliation
+        const distToServer = Math.hypot(h.x - d.x, h.y - d.y);
+        if (distToServer > 130) {
+          d.x = h.x;
+          d.y = h.y;
+        } else {
+          const reconRate = n > 0 ? 14 : 32;
+          const recon = 1 - Math.exp(-dt * reconRate);
+          d.x += (h.x - d.x) * recon;
+          d.y += (h.y - d.y) * recon;
+        }
+      } else {
+        // Dead-reckoning extrapolation for remote hero
+        const targetX = h.x + h.vx * 0.04;
+        const targetY = h.y + h.vy * 0.04;
+        const a = 1 - Math.exp(-dt * 36);
+        d.x += (targetX - d.x) * a;
+        d.y += (targetY - d.y) * a;
+      }
       if (h.hp <= 0) return;
       ctx.save();
       ctx.translate(d.x, d.y);
@@ -698,7 +829,8 @@ function paintCustomProjectile(
         bob = o.reduced()
           ? 0
           : Math.sin(now / (Math.hypot(h.vx, h.vy) > 5 ? 80 : 340)) * 1.5;
-      ctx.scale(Math.cos(h.angle) < 0 ? -1 : 1, 1);
+      const facingAngle = isLocal ? input.angle : h.angle;
+      ctx.scale(Math.cos(facingAngle) < 0 ? -1 : 1, 1);
       if (img?.complete && img.naturalWidth) {
         const scale = Math.min(76 / img.naturalWidth, 84 / img.naturalHeight);
         ctx.drawImage(
