@@ -82,6 +82,7 @@ export function createGameServer() {
         }
       },
       methods: ["GET", "POST"],
+      allowedHeaders: ["*"],
       credentials: true,
     },
     maxHttpBufferSize: 2048,

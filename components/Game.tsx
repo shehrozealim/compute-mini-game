@@ -59,6 +59,9 @@ export default function Game() {
     };
     const s = io(process.env.NEXT_PUBLIC_SERVER_URL || undefined, {
       reconnection: true,
+      extraHeaders: {
+        "ngrok-skip-browser-warning": "true",
+      },
     });
     socket.current = s;
     s.on("connect", () => {
