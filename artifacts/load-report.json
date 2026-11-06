@@ -1,0 +1,22 @@
+{
+  "roomCount": 50,
+  "teams": 100,
+  "connectedClients": 100,
+  "durationSeconds": 30.0098917,
+  "transport": "WebSocket / local loopback",
+  "inputHz": 30,
+  "simulationHz": 30,
+  "snapshotHz": 15,
+  "simulationSteps": 45000,
+  "timingSamples": 600,
+  "timingWindow": "Most recent 600 scheduler callbacks",
+  "simulationP95Ms": 6.756599999996979,
+  "simulationMaxMs": 11.147100000000137,
+  "eventLoopP95Ms": 26.755071,
+  "receivedSnapshots": 45000,
+  "minSnapshotsPerClient": 450,
+  "droppedSimulationSeconds": 0,
+  "rssMiB": 116.0234375,
+  "rssGrowthMiB": 14.546875,
+  "limitations": "Short local benchmark; server and synthetic clients share one process and machine. Not a production capacity guarantee."
+}

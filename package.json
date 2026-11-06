@@ -1,0 +1,35 @@
+{
+  "name": "tandem-arena",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"next dev\" \"node --watch --env-file-if-exists=.env.local --import tsx server/index.ts\"",
+    "build": "next build && esbuild server/index.ts --bundle --platform=node --packages=external --format=esm --outfile=dist/server.js",
+    "start": "concurrently -k \"next start\" \"node --env-file-if-exists=.env.local dist/server.js\"",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:load": "tsx scripts/load-test.ts",
+    "test:smoke": "node scripts/realtime-smoke.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "concurrently": "^9.1.2",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "postcss": "^8.5.23"
+  }
+}
